@@ -1,0 +1,405 @@
+/*assalam w alikom*/ 
+
+#include <WiFi.h>// iwifi connecte for the esp
+#include <WebServer.h>
+#include <DHTesp.h>// libary   for the dht sensor for the esp
+
+const char* ssid = "ssid";// enter u r wifi ssid
+const char* password = "password";//enter u r wifi password
+
+const int PulseSensorPurplePin = 36;^// pin for rhe pulse Sensor
+const int Threshold = 1500;
+const int DHT_Pin = 17; // Pin connected to the DHT11 sensor
+
+WebServer server(80);
+int LED_BUILTIN = 22;
+
+int beatCount = 0;
+int heartRate = 0;
+float temperature = 0.0;
+float humidity = 0.0;
+unsigned long previousPrint = 0;
+
+DHTesp dht;
+//start the html code  for  the web page designe 
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heart Rate Monitor</title>
+    <style>
+      body {
+            background-color: #e6fffa; /* Light yellow color */
+        }    
+        /* Heartbeat animation */
+        @keyframes heartbeat {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.5); } /* Increase scale for a larger heart */
+            100% { transform: scale(1); }
+        }
+
+        /* Heart design */
+        .heart {
+            color: red;
+            font-size: 60px; /* Adjust font size for a larger heart */
+            animation: heartbeat 1s infinite; /* This line applies the heartbeat animation */
+            display: inline-block;
+            margin-right: 20px;
+        }
+
+        /* Container for the heart rate monitor and chart */
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* Heart rate monitor section */
+        .heart-rate-monitor {
+            margin-bottom: 20px;
+        }
+
+        /* Styling for the chart canvas */
+        #heartRateChart {
+            width: 100%;
+            height: 150px; /* Adjust the height of the chart */
+        }
+
+        /* Styling for the additional sentence */
+        .additional-sentence {
+            margin-top: 20px;
+            font-style: italic;
+            color: green; /* Green color */
+        }
+
+        /* Styling for the title */
+        h1 {
+            color: green; /* Cgreen color */
+        }
+
+        /* Styling for the circles */
+        .circle {
+            width: 60px; /* Adjust width */
+            height: 60px; /* Adjust height */
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 20px;
+        }
+
+        .circle.slow {
+            background-color: blue;
+        }
+
+        .circle.good {
+            background-color: green;
+        }
+
+        .circle.fast {
+            background-color: red;
+        }
+
+        /* Panel container */
+        .panel-container {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+        }
+
+        /* Panel styles */
+        .panel {
+            width: 200px;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            background-color: #f8f9fa;
+        }
+
+        /* Temperature panel */
+        .temperature-panel {
+            border-top: 4px solid #007bff; /* Blue border for temperature panel */
+        }
+
+        /* Humidity panel */
+        .humidity-panel {
+            border-top: 4px solid #28a745; /* Green border for humidity panel */
+        }
+
+        /* Panel heading */
+        .panel h2 {
+            margin: 0;
+            color: #343a40;
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        /* Panel content */
+        .panel-content {
+            margin-top: 10px;
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center; /* Center-align the content */
+
+        }
+
+        /* Message for humidity */
+        .message {
+            margin-top: 10px;
+            font-style: italic;
+            color: red;
+        }
+
+        /* Value styling */
+        .value {
+            color: #007bff; /* Blue color for temperature value */
+        }
+
+        /* Unit styling */
+        .unit {
+            font-size: 16px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <h1>JIJEL UNIV<br><span id="heartRateValue" class="heart"></span></h1>
+    <div class="container">
+        <!-- Heart rate monitor section -->
+        <div class="heart-rate-monitor">
+            <div id="heartContainer">
+                <span class="heart">&hearts;</span> <!-- Heart icon -->
+                <span id="heartRate"></span> <!-- Heart rate -->
+            </div>
+        </div>
+        <!-- Chart section -->
+        <canvas id="heartRateChart"></canvas>
+        <!-- Additional sentence -->
+        <p class="additional-sentence">The normal number of heartbeats for a human being is between 50 and 90 beats per minute.</p>
+        <!-- Circles for heart rate indication -->
+        <div>
+            <div class="circle slow"></div>
+            <div class="circle good"></div>
+            <div class="circle fast"></div>
+        </div>
+        <!-- Panel container for temperature and humidity -->
+        <div class="panel-container">
+            <!-- Temperature panel -->
+            <div class="panel temperature-panel">
+                <h2>Temperature</h2>
+                <div class="panel-content">
+                    <span id="temperatureValue" class="value"></span> <span class="unit">°C</span>
+                </div>
+            </div>
+            <!-- Humidity panel -->
+            <div class="panel humidity-panel">
+                <h2>Humidity</h2>
+                <div class="panel-content">
+                    <span id="humidityValue" class="value"></span> <span class="unit">%</span>
+                </div>
+                <div id="humidityMessage" class="message"></div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Function to fetch heart rate data from ESP32 and update the chart
+        function fetchHeartRateData() {
+            var xhr = new XMLHttpRequest();
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === XMLHttpRequest.DONE) {
+                    if (xhr.status === 200) {
+                        // Parse heart rate data
+                        var heartRate = parseInt(xhr.responseText);
+                        updateChart(heartRate);
+                        document.getElementById("heartRateValue").textContent = heartRate; // Update heart rate value
+                        updateHeartRateIndication(heartRate); // Update circle colors based on heart rate
+                    } else {
+                        console.error("Error fetching heart rate: " + xhr.status);
+                    }
+                }
+            };
+            xhr.open("GET", "/heartRate", true);
+            xhr.send();
+        }
+
+        // Function to fetch temperature data from ESP32 and update the page
+        function fetchTemperature() {
+            var xhr = new XMLHttpRequest();
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === XMLHttpRequest.DONE) {
+                    if (xhr.status === 200) {
+                        var data = JSON.parse(xhr.responseText);
+                        document.getElementById("temperatureValue").textContent = data.temperature; // Update temperature value
+                        document.getElementById("humidityValue").textContent = data.humidity; // Update humidity value
+                        if (data.humidity > 70) {
+                            document.getElementById("humidityMessage").textContent = " high"; // Display message
+                        } else {
+                            document.getElementById("humidityMessage").textContent = ""; // Clear message
+                        }
+                    } else {
+                        console.error("Error fetching temperature: " + xhr.status);
+                    }
+                }
+            };
+            xhr.open("GET", "/temperature", true);
+            xhr.send();
+        }
+
+        // Update the chart with new heart rate data
+        function updateChart(heartRate) {
+            // Get current time
+            var now = new Date().toLocaleTimeString();
+
+            // Add data to the chart
+            heartRateChart.data.labels.push(now);
+            heartRateChart.data.datasets[0].data.push(heartRate);
+
+            // Limit the number of data points to 10
+            if (heartRateChart.data.labels.length > 10) {
+                heartRateChart.data.labels.shift();
+                heartRateChart.data.datasets[0].data.shift();
+            }
+
+            // Update the chart
+            heartRateChart.update();
+        }
+
+        // Update the colors of the circles based on heart rate
+        function updateHeartRateIndication(heartRate) {
+            var circles = document.querySelectorAll('.circle');
+
+            // Reset colors
+            circles.forEach(circle => {
+                circle.classList.remove('slow', 'good', 'fast');
+            });
+
+            // Set colors based on heart rate
+            if (heartRate < 40) {
+                circles[0].classList.add('slow');
+            } else if (heartRate >= 40 && heartRate <= 100) {
+                circles[1].classList.add('good');
+            } else {
+                circles[2].classList.add('fast');
+            }
+        }
+
+        // Create the initial chart
+        var ctx = document.getElementById('heartRateChart').getContext('2d');
+        var heartRateChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Heart Rate (bpm)',
+                    data: [],
+                    borderColor: 'red',
+                    fill: false
+                }]
+            },
+            options: {
+                scales: {
+                    yAxes: [{
+                        ticks: {
+                            beginAtZero: true
+                        }
+                    }]
+                }
+            }
+        });
+
+        // Fetch heart rate data initially
+        fetchHeartRateData();
+
+        // Fetch heart rate data every 2 seconds
+        setInterval(fetchHeartRateData, 2000);
+
+        // Fetch temperature data initially
+        fetchTemperature();
+
+        // Fetch temperature data every 5 seconds
+        setInterval(fetchTemperature, 5000);
+    </script>
+</body>
+</html>
+
+)rawliteral";
+//end of html code 
+void handleRoot() {
+  server.send(200, "text/html", index_html);
+}
+
+void handleHeartRate() {
+  server.send(200, "text/plain", String(heartRate));
+}
+
+void handleTemperature() {
+  float temp = dht.getTemperature();
+  float hum = dht.getHumidity();
+  String json = "{\"temperature\": " + String(temp) + ", \"humidity\": " + String(hum) + "}";
+  server.send(200, "application/json", json);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.println("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Connected to WiFi");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Failed to connect to WiFi");
+  }
+
+  // Initialize DHT sensor
+  dht.setup(DHT_Pin, DHTesp::DHT11);
+
+  // Route for root
+  server.on("/", HTTP_GET, handleRoot);
+
+  // Route for heart rate data
+  server.on("/heartRate", HTTP_GET, handleHeartRate);
+
+  // Route for temperature and humidity data
+  server.on("/temperature", HTTP_GET, handleTemperature);
+
+  server.begin();
+}
+
+void loop() {
+  // Read the pulse sensor value
+  int Signal = analogRead(PulseSensorPurplePin);
+
+  // If the signal is above the threshold, increment beat count
+  if (Signal > Threshold) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    beatCount++;
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+
+  unsigned long currentMillis = millis();
+
+  // If 5 seconds have passed, calculate heart rate
+  if (currentMillis - previousPrint >= 5000) {
+    // Calculate heart rate
+    heartRate = (beatCount * 12);
+    Serial.println("bpm = ");
+    Serial.print(heartRate);
+    // Reset beat count and update previous print time
+    beatCount = 0;
+    previousPrint = currentMillis;
+  }
+
+  server.handleClient();
+}
